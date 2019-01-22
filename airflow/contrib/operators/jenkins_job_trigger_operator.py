@@ -26,7 +26,7 @@ from airflow.utils.decorators import apply_defaults
 from airflow.contrib.hooks.jenkins_hook import JenkinsHook
 import jenkins
 from jenkins import JenkinsException
-from requests import Request
+from six.moves.urllib.request import Request, urlopen
 from six.moves.urllib.error import HTTPError, URLError
 
 try:
@@ -35,21 +35,27 @@ except NameError:
     basestring = str  # For python3 compatibility
 
 
-def jenkins_request_with_headers(jenkins_server, req):
+# TODO Use jenkins_urlopen instead when it will be available
+# in the stable python-jenkins version (> 0.4.15)
+def jenkins_request_with_headers(jenkins_server, req, add_crumb=True):
     """
     We need to get the headers in addition to the body answer
     to get the location from them
-    This function uses jenkins_request method from python-jenkins library
+    This function is just a copy of the one present in python-jenkins library
     with just the return call changed
     :param jenkins_server: The server to query
     :param req: The request to execute
-    :return: Dict containing the response body (key body)
-    and the headers coming along (headers)
+    :param add_crumb: Boolean to indicate if it should add crumb to the request
+    :return:
     """
     try:
-        response = jenkins_server.jenkins_request(req)
-        response_body = response.content
-        response_headers = response.headers
+        if jenkins_server.auth:
+            req.add_header('Authorization', jenkins_server.auth)
+        if add_crumb:
+            jenkins_server.maybe_add_crumb(req)
+        response = urlopen(req, timeout=jenkins_server.timeout)
+        response_body = response.read()
+        response_headers = response.info()
         if response_body is None:
             raise jenkins.EmptyResponseException(
                 "Error communicating with server[%s]: "
@@ -144,7 +150,7 @@ class JenkinsJobTriggerOperator(BaseOperator):
             self.parameters = None
 
         request = Request(jenkins_server.build_job_url(self.job_name,
-                                                       self.parameters, None))
+                                                       self.parameters, None), b'')
         return jenkins_request_with_headers(jenkins_server, request)
 
     def poll_job_in_queue(self, location, jenkins_server):
